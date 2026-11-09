@@ -8,6 +8,17 @@ game:GetService("TweenService")
 local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
 
+pcall(function()
+	task.spawn(function()
+		local pk = ReplicatedStorage:WaitForChild("Packages", 5)
+		local net = pk and pk:WaitForChild("Networking", 5)
+		local coinsEv = net and (net:FindFirstChild("RE/PenRoster/CoinsGathered") or net:WaitForChild("RE/PenRoster/CoinsGathered", 5))
+		if coinsEv and coinsEv:IsA("RemoteEvent") then
+			coinsEv.OnClientEvent:Connect(function() end)
+		end
+	end)
+end)
+
 local function fn()
 	return Workspace:FindFirstChild("World") or Workspace:FindFirstChild("__OBJECTS")
 end
@@ -58,36 +69,7 @@ do
 	end
 
 	local function fn4()
-		for i, v2 in ipairs(tbl2) do
-			local v3 = genv[v2]
-
-			if v3 ~= tbl3[v2] then
-				return "api:" .. v2
-			elseif fn3(v3) then
-				return "api:" .. v2
-			end
-		end
-
-		local getrawmetatable = tbl3.getrawmetatable
-
-		if type(getrawmetatable) == "function" then
-			local ok, result = pcall(getrawmetatable, game)
-
-			if ok and type(result) == "table" then
-				for i, v2 in ipairs({"__namecall", "__index", "__newindex"}) do
-					if fn3(rawget(result, v2)) then
-						return "mt:" .. v2
-					end
-				end
-			end
-		end
-
-		local remoteEvent = Instance.new("RemoteEvent")
-		local remoteFunction = Instance.new("RemoteFunction")
-		local v2 = if fn3(remoteEvent.FireServer) then "remote:FireServer" else if fn3(remoteFunction.InvokeServer) then "remote:InvokeServer" else nil
-		remoteEvent:Destroy()
-		remoteFunction:Destroy()
-		return v2
+		return nil
 	end
 
 	local function fn5(arg)
@@ -10680,8 +10662,7 @@ local v8 = (function()
 
 			if not isCarrying() then
 				arg.skippedEggs[uid] = os.clock() + 5
-				return arg:_finish("Chilli grab timeout 
-88 retrying")
+				return arg:_finish("Chilli grab timeout - retrying")
 			end
 
 			arg.carry.active = true
@@ -10696,8 +10677,7 @@ local v8 = (function()
 		if not ok then
 			warn("[Chilli Steal] error: " .. tostring(result))
 			if not arg.destroyed and arg.enabled then
-				arg:_finish("Chilli error 
-88 retrying")
+				arg:_finish("Chilli error - retrying")
 			end
 		end
 	end
@@ -33361,19 +33341,17 @@ local function fn66()
 					end
 				end
 
-				predSummary:SetContent(string.format("Total: %d telur  9483  Ready: %d  9483  Growing: %d  9483  Tas: %d
-Perkiraan Total Penghasilan: %s", #eggList, readyCount, growingCount, bagCount, formatRate(totalRate)))
+				predSummary:SetContent(string.format("Total: %d telur | Ready: %d | Growing: %d | Tas: %d\nPerkiraan Total Penghasilan: %s", #eggList, readyCount, growingCount, bagCount, formatRate(totalRate)))
 
 				for i = 1, 8 do
 					local card = predSlotCards[i]
 					if card then
 						local egg = eggList[i]
 						if egg then
-							local statusText = if egg.Status == "Ready" then "lq SIAP DITETASKAN!" elseif egg.Status == "Growing" then string.format("Menetas dlm %s (%d%%)", formatClock(egg.Remaining), egg.Percent) else "Di dalam Tas"
+							local statusText = if egg.Status == "Ready" then "[SIAP] Ditetaskan!" elseif egg.Status == "Growing" then string.format("Menetas dlm %s (%d%%)", formatClock(egg.Remaining), egg.Percent) else "Di dalam Tas"
 							local muts = #egg.Mutations > 0 and (" | Mutasi: " .. table.concat(egg.Mutations, ", ")) or ""
 							card:SetTitle(string.format("[%d] %s (%s)", i, egg.Name, egg.Rarity))
-							card:SetContent(string.format("Status: %s
-Scale: %.2fx%s  9483  Income: %s", statusText, egg.Scale, muts, formatRate(egg.Income)))
+							card:SetContent(string.format("Status: %s\nScale: %.2fx%s | Income: %s", statusText, egg.Scale, muts, formatRate(egg.Income)))
 						else
 							card:SetTitle(string.format("[%d] Slot Kosong", i))
 							card:SetContent("Belum ada telur di slot ini")
