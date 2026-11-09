@@ -5507,8 +5507,8 @@ local v8 = (function()
 	index.setStealMode = function(arg, arg2, arg3, arg4)
 		local stealMode
 		local strCheck = type(arg2) == "string" and arg2:lower() or ""
-		if strCheck:find("teleport") then
-			stealMode = "Instant Teleport"
+		if strCheck:find("safe") or strCheck:find("teleport") or strCheck:find("instan") then
+			stealMode = "Safe Zone Steal"
 		elseif strCheck:find("chilli") or strCheck:find("fast") then
 			stealMode = "Chilli Fast"
 		elseif arg2 == "Fly" then
@@ -10640,9 +10640,11 @@ local v8 = (function()
 		return true
 	end
 
-	index._instantTeleportSteal = function(arg, activeTarget)
+	index._safeZoneSteal = function(arg, activeTarget)
 		local uid = activeTarget.Uid
-		arg._instantBusyUid = uid
+		arg._safeZoneBusyUid = uid
+		arg.running = true
+		arg.activeTarget = activeTarget
 
 		local function isCarrying()
 			local v8 = EggState2.ReadFieldEgg(uid)
@@ -10651,132 +10653,126 @@ local v8 = (function()
 
 		local function isRunning()
 			local destroyed = arg.destroyed
-			return (if destroyed then not destroyed else arg.enabled) and arg._instantBusyUid == uid
+			return (if destroyed then not destroyed else arg.enabled) and arg._safeZoneBusyUid == uid
 		end
 
 		local ok, result = pcall(function()
 			arg.instantPhase = nil
 			arg.primerUid = nil
 			arg.targetUid = nil
-			arg.activeTarget = activeTarget
-			arg.stats.lastResult = "Instant Teleport"
-			arg:_setStatus("Instant Teleport - Teleporting to egg")
+			arg.stats.lastResult = "Safe Zone Steal"
+			arg:_setStatus("Safe Zone Steal - Securing egg")
 
 			local character = localPlayer2.Character
 			local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			if not humanoidRootPart or not humanoid then
+				arg.running = false
 				return arg:_finish("Character unavailable")
 			end
 
 			applyCharacterBypass(character)
 
-			local dest = arg:_resolveEggDestination(activeTarget, humanoidRootPart, humanoid)
-			if not dest then
-				return arg:_finish("Egg position unavailable")
-			end
+			local safeCF = arg:_resolveSafeCFrame(humanoidRootPart) or humanoidRootPart.CFrame
+			local eggDest = arg:_resolveEggDestination(activeTarget, humanoidRootPart, humanoid)
 
-			local targetPos = dest.Position + Vector3.new(0, 2.5, 0)
-			local safeCF = arg:_resolveSafeCFrame(humanoidRootPart)
-			if not safeCF then
-				safeCF = CFrame.new(565.74, 71.69, -368.14)
-			end
+			-- Direct fast prompt lookup (O(1) without laggy GetDescendants)
+			local areaEggSlotsClient = workspace:FindFirstChild("AreaEggSlotsClient")
+			local slotObj = areaEggSlotsClient and areaEggSlotsClient:FindFirstChild(tostring(uid))
+			local prompt = slotObj and (slotObj:FindFirstChild("CarryAreaEgg", true) or slotObj:FindFirstChildWhichIsA("ProximityPrompt", true))
 
-			-- Ultra-fast travel to egg
-			local startCFrame = humanoidRootPart.CFrame
-			local targetCFrame = CFrame.new(targetPos)
-			local dist = (targetPos - humanoidRootPart.Position).Magnitude
-			local speed = 500
-			local travelTime = math.clamp(dist / speed, 0.05, 0.35)
-			local startTime = os.clock()
-
-			while isRunning() and not isCarrying() and (os.clock() - startTime < travelTime) do
-				local alpha = math.clamp((os.clock() - startTime) / travelTime, 0, 1)
-				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-				humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-				humanoidRootPart.CFrame = startCFrame:Lerp(targetCFrame, alpha)
-				RunService2.Stepped:Wait()
-			end
-
-			pcall(function()
-				humanoidRootPart.CFrame = targetCFrame
-				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-				humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-			end)
-
-			arg:_setStatus("Instant Teleport - Grabbing egg")
-			local grabDeadline = os.clock() + 2.0
-			local nextReq = 0
-
-			local AreaEggSlotIdentity = (ReplicatedStorage:FindFirstChild("Shared") and ReplicatedStorage.Shared:FindFirstChild("Util") and require(ReplicatedStorage.Shared.Util.AreaEggSlotIdentity))
-				or (ReplicatedStorage:FindFirstChild("Util") and require(ReplicatedStorage.Util.AreaEggSlotIdentity))
-			local slotKey = nil
-			if AreaEggSlotIdentity and AreaEggSlotIdentity.LooksLikeFirstAreaUid and AreaEggSlotIdentity.LooksLikeFirstAreaUid(uid) then
-				slotKey = AreaEggSlotIdentity.SlotKey(activeTarget.AreaId or 1, activeTarget.NestId or 1)
-			end
-
-			while isRunning() and not isCarrying() and os.clock() < grabDeadline do
-				for _, prompt in ipairs(workspace:GetDescendants()) do
-					if prompt:IsA("ProximityPrompt") and (prompt.Name == "CarryAreaEgg" or prompt.ActionText:lower():find("carry") or prompt.ActionText:lower():find("steal")) then
-						local pPart = prompt.Parent
-						if pPart:IsA("Attachment") then pPart = pPart.Parent end
-						if pPart and pPart:IsA("BasePart") and (pPart.Position - humanoidRootPart.Position).Magnitude < 30 then
-							prompt.HoldDuration = 0
-							if typeof(fireproximityprompt) == "function" then
-								pcall(fireproximityprompt, prompt)
-							end
+			if not prompt then
+				for _, folderName in ipairs({"Eggs", "EggWorld", "FieldEggs"}) do
+					local f = workspace:FindFirstChild(folderName)
+					if f then
+						local found = f:FindFirstChild(tostring(uid), true)
+						if found then
+							prompt = found:FindFirstChildWhichIsA("ProximityPrompt", true)
+							if prompt then break end
 						end
 					end
 				end
+			end
 
-				if os.clock() >= nextReq then
-					nextReq = os.clock() + 0.08
-					task.spawn(function()
-						pcall(function()
-							eggWorld.AskFieldEggCarry:InvokeServer({ Uid = uid, FirstAreaSlotKey = slotKey })
-						end)
-						if type(EggState2.CarryFieldEgg) == "function" then
-							pcall(EggState2.CarryFieldEgg, uid, slotKey)
-						end
-					end)
+			if prompt then
+				prompt.HoldDuration = 0
+				prompt.RequiresLineOfSight = false
+				prompt.MaxActivationDistance = math.huge
+			end
+
+			-- Lock character firmly in Safe Zone!
+			humanoidRootPart.CFrame = safeCF
+			humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+			humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+
+			-- Phase 1: Remote carry directly while standing in Safe Zone
+			local deadline1 = os.clock() + 0.45
+			while isRunning() and not isCarrying() and os.clock() < deadline1 do
+				if prompt and typeof(fireproximityprompt) == "function" then
+					pcall(fireproximityprompt, prompt, 0)
 				end
-
+				pcall(function()
+					eggWorld.AskFieldEggCarry:InvokeServer({ Uid = uid })
+				end)
+				pcall(function()
+					EggState2.CarryFieldEgg(uid)
+				end)
 				RunService2.Heartbeat:Wait()
 			end
 
-			if not isCarrying() then
-				arg.skippedEggs[uid] = os.clock() + 4
-				return arg:_finish("Grab timeout - retrying")
-			end
-
-			-- Instant Return Teleport & Hold at Safe Zone
-			arg:_setStatus("Instant Teleport - Teleporting home")
-			local returnStart = os.clock()
-			local returnTime = 0.08
-			local eggStartCF = humanoidRootPart.CFrame
-
-			while (if arg.destroyed then false else arg.enabled) and os.clock() - returnStart < returnTime do
-				local alpha = math.clamp((os.clock() - returnStart) / returnTime, 0, 1)
+			-- Phase 2: If server distance check is active, do a 1-frame micro-flick (desync) to egg and back
+			if not isCarrying() and eggDest then
+				arg:_setStatus("Safe Zone Steal - Desync grab")
+				humanoidRootPart.CFrame = eggDest
 				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-				humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-				humanoidRootPart.CFrame = eggStartCF:Lerp(safeCF, alpha)
-				RunService2.Stepped:Wait()
-			end
 
-			local holdStart = os.clock()
-			while (if arg.destroyed then false else arg.enabled) and os.clock() - holdStart < 0.6 do
-				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
-				humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+				if prompt and typeof(fireproximityprompt) == "function" then
+					pcall(fireproximityprompt, prompt, 0)
+				end
+				pcall(function()
+					eggWorld.AskFieldEggCarry:InvokeServer({ Uid = uid })
+				end)
+				pcall(function()
+					EggState2.CarryFieldEgg(uid)
+				end)
+
+				task.wait(0.04)
+				-- Immediately snap back to Safe Zone!
 				humanoidRootPart.CFrame = safeCF
-				character:PivotTo(safeCF)
+				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+			end
 
+			-- Phase 3: Wait confirmation at Safe Zone
+			local deadline2 = os.clock() + 0.5
+			while isRunning() and not isCarrying() and os.clock() < deadline2 do
+				humanoidRootPart.CFrame = safeCF
+				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+				RunService2.Heartbeat:Wait()
+			end
+
+			-- Ensure player is locked in Safe Zone
+			humanoidRootPart.CFrame = safeCF
+			humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+
+			if not isCarrying() then
+				arg.skippedEggs[uid] = os.clock() + 3
+				arg.running = false
+				return arg:_finish("Grab failed - retrying")
+			end
+
+			-- Phase 4: Drop / Deposit egg directly into base plot nest
+			arg:_setStatus("Safe Zone Steal - Banking egg")
+			local dropDeadline = os.clock() + 1.2
+			while isRunning() and os.clock() < dropDeadline do
+				humanoidRootPart.CFrame = safeCF
+				humanoidRootPart.AssemblyLinearVelocity = Vector3.zero
 				local rec = EggState2.ReadFieldEgg(uid)
 				if not rec or rec.State == AreaEggs.States.Claimed or rec.State ~= AreaEggs.States.Carried then
 					break
 				end
-				if type(EggState2.DropFieldEgg) == "function" then
-					pcall(EggState2.DropFieldEgg, "PlayerRequest")
-				end
+				pcall(function()
+					EggState2.DropFieldEgg("PlayerRequest")
+				end)
 				RunService2.Heartbeat:Wait()
 			end
 
@@ -10784,17 +10780,19 @@ local v8 = (function()
 			arg.carry.active = false
 			arg.carry.uid = nil
 			arg.activeTarget = nil
+			arg.running = false
 			arg:_finish("Delivered successfully")
 		end)
 
-		if arg._instantBusyUid == uid then
-			arg._instantBusyUid = nil
+		if arg._safeZoneBusyUid == uid then
+			arg._safeZoneBusyUid = nil
 		end
+		arg.running = false
 
 		if not ok then
-			warn("[Instant Teleport Steal] error: " .. tostring(result))
+			warn("[Safe Zone Steal] error: " .. tostring(result))
 			if not arg.destroyed and arg.enabled then
-				arg:_finish("Teleport error - retrying")
+				arg:_finish("Safe steal error - retrying")
 			end
 		end
 	end
@@ -10802,6 +10800,8 @@ local v8 = (function()
 	index._chilliSteal = function(arg, activeTarget)
 		local uid = activeTarget.Uid
 		arg._chilliBusyUid = uid
+		arg.running = true
+		arg.activeTarget = activeTarget
 
 		local function isCarrying()
 			local v8 = EggState2.ReadFieldEgg(uid)
@@ -10817,7 +10817,6 @@ local v8 = (function()
 			arg.instantPhase = nil
 			arg.primerUid = nil
 			arg.targetUid = nil
-			arg.activeTarget = activeTarget
 			arg.stats.lastResult = "Chilli Fast"
 			arg:_setStatus("Chilli Fast - Gliding to egg")
 
@@ -10825,6 +10824,7 @@ local v8 = (function()
 			local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			if not humanoidRootPart or not humanoid then
+				arg.running = false
 				return arg:_finish("Character unavailable")
 			end
 
@@ -10832,16 +10832,17 @@ local v8 = (function()
 
 			local dest = arg:_resolveEggDestination(activeTarget, humanoidRootPart, humanoid)
 			if not dest then
+				arg.running = false
 				return arg:_finish("Egg position unavailable")
 			end
 
-			local targetPos = dest.Position + Vector3.new(0, 2.5, 0)
+			local targetPos = dest.Position
 			local startPos = humanoidRootPart.Position
 			local highY = math.max(startPos.Y, targetPos.Y) + 32
 			local timeout = os.clock() + 7
 			local speed = math.clamp((tonumber(arg.speedMultiplier) or 60) * 10, 450, 1000)
 
-			-- Fly elevated above guards and obstacles!
+			-- Elevated path above guards and obstacles!
 			local waypoints = {
 				Vector3.new(startPos.X, highY, startPos.Z),
 				Vector3.new(targetPos.X, highY, targetPos.Z),
@@ -10864,7 +10865,7 @@ local v8 = (function()
 				end
 			end
 
-			if not isRunning() then return end
+			if not isRunning() then arg.running = false return end
 
 			pcall(function()
 				humanoidRootPart.CFrame = CFrame.new(targetPos)
@@ -10872,31 +10873,31 @@ local v8 = (function()
 			end)
 
 			arg:_setStatus("Chilli Fast - Grabbing egg")
-			local grabDeadline = os.clock() + 2.5
+			local grabDeadline = os.clock() + 2.0
 			local nextReq = 0
 
+			local areaEggSlotsClient = workspace:FindFirstChild("AreaEggSlotsClient")
+			local slotObj = areaEggSlotsClient and areaEggSlotsClient:FindFirstChild(tostring(uid))
+			local prompt = slotObj and (slotObj:FindFirstChild("CarryAreaEgg", true) or slotObj:FindFirstChildWhichIsA("ProximityPrompt", true))
+			if prompt then
+				prompt.HoldDuration = 0
+				prompt.RequiresLineOfSight = false
+			end
+
 			while isRunning() and not isCarrying() and os.clock() < grabDeadline do
-				for _, prompt in ipairs(workspace:GetDescendants()) do
-					if prompt:IsA("ProximityPrompt") and (prompt.Name == "CarryAreaEgg" or prompt.ActionText:lower():find("carry") or prompt.ActionText:lower():find("steal")) then
-						local pPart = prompt.Parent
-						if pPart and pPart:IsA("BasePart") and (pPart.Position - humanoidRootPart.Position).Magnitude < 25 then
-							prompt.HoldDuration = 0
-							if typeof(fireproximityprompt) == "function" then
-								pcall(fireproximityprompt, prompt)
-							end
-						end
-					end
+				if prompt and typeof(fireproximityprompt) == "function" then
+					pcall(fireproximityprompt, prompt, 0)
 				end
 
 				if os.clock() >= nextReq then
-					nextReq = os.clock() + 0.1
+					nextReq = os.clock() + 0.08
 					task.spawn(function()
 						pcall(function()
 							eggWorld.AskFieldEggCarry:InvokeServer({Uid = uid})
 						end)
-						if type(EggState2.CarryFieldEgg) == "function" then
-							pcall(EggState2.CarryFieldEgg, uid)
-						end
+						pcall(function()
+							EggState2.CarryFieldEgg(uid)
+						end)
 					end)
 				end
 
@@ -10904,7 +10905,8 @@ local v8 = (function()
 			end
 
 			if not isCarrying() then
-				arg.skippedEggs[uid] = os.clock() + 5
+				arg.skippedEggs[uid] = os.clock() + 4
+				arg.running = false
 				return arg:_finish("Chilli grab timeout - retrying")
 			end
 
@@ -10916,6 +10918,7 @@ local v8 = (function()
 		if arg._chilliBusyUid == uid then
 			arg._chilliBusyUid = nil
 		end
+		arg.running = false
 
 		if not ok then
 			warn("[Chilli Steal] error: " .. tostring(result))
@@ -10931,6 +10934,7 @@ local v8 = (function()
 		local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
 		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 		if not humanoidRootPart or not humanoid then
+			arg.running = false
 			return arg:_finish("Character lost")
 		end
 
@@ -10938,6 +10942,7 @@ local v8 = (function()
 
 		local safeCF = arg:_resolveSafeCFrame(humanoidRootPart)
 		if not safeCF then
+			arg.running = false
 			return arg:_finish("Safe destination unavailable")
 		end
 
@@ -10975,15 +10980,15 @@ local v8 = (function()
 		end)
 
 		arg:_setStatus("Chilli Fast - Banking egg")
-		local dropDeadline = os.clock() + 2
+		local dropDeadline = os.clock() + 1.5
 		while (if arg.destroyed then false else arg.enabled) and os.clock() < dropDeadline do
 			local rec = EggState2.ReadFieldEgg(adminDeliverUid)
 			if not rec or rec.State == AreaEggs.States.Claimed or rec.State ~= AreaEggs.States.Carried then
 				break
 			end
-			if type(EggState2.DropFieldEgg) == "function" then
-				pcall(EggState2.DropFieldEgg, "PlayerRequest")
-			end
+			pcall(function()
+				EggState2.DropFieldEgg("PlayerRequest")
+			end)
 			RunService2.Heartbeat:Wait()
 		end
 
@@ -10991,6 +10996,7 @@ local v8 = (function()
 		arg.carry.active = false
 		arg.carry.uid = nil
 		arg.activeTarget = nil
+		arg.running = false
 		arg:_finish("Delivered successfully")
 	end
 
@@ -11950,9 +11956,9 @@ local v8 = (function()
 			return
 		end
 
-		if arg.config.stealMode == "Instant Teleport" and not (arg.captureObjectiveEnabled and arg:_isCaptureEgg(v10.Uid)) then
+		if (arg.config.stealMode == "Safe Zone Steal" or arg.config.stealMode == "Instant Teleport" or arg.config.stealMode == "Instant") and not (arg.captureObjectiveEnabled and arg:_isCaptureEgg(v10.Uid)) then
 			arg.safeStarting = false
-			task.spawn(arg._instantTeleportSteal, arg, v10)
+			task.spawn(arg._safeZoneSteal, arg, v10)
 			return
 		end
 
@@ -32688,7 +32694,7 @@ local function fn66()
 		local str4 = type(arg) == "string" and arg or ""
 		local str5 = str4:lower()
 		local flag11 = str5:find("zig") ~= nil
-		local stealMode = if str5:find("teleport") then "Instant Teleport" elseif str5:find("chilli") or str5:find("fast") then "Chilli Fast" elseif (str4:find("Fly") or str4:find("High") or flag11) then "Fly" else "Instant"
+		local stealMode = if str5:find("safe") or str5:find("teleport") or str5:find("instan") then "Safe Zone Steal" elseif str5:find("chilli") or str5:find("fast") then "Chilli Fast" elseif (str4:find("Fly") or str4:find("High") or flag11) then "Fly" else "Instant"
 		local flyAerial = stealMode == "Fly" and not flag11 and (str4:find("%(Fly%)") ~= nil or str5:find("aerial") ~= nil)
 		local flyZigzag = flag11 and stealMode == "Fly"
 		senaV4Config.StealMode = stealMode
@@ -33641,7 +33647,7 @@ local function fn66()
 
 	tbl24.godMode = v40:AddToggle({Title = "Aura Bat", Content = "", Default = false, Callback = fn144(fn80)})
 
-	tbl24.stealMode = v40:AddDropdown({Title = "Steal Mode", Content = "Instant Teleport = Steal instan langsung teleport ke telur & base dengan bypass guard!\nChilli Fast = Mode Steal cepat via jalur udara aman dari guard.", Options = {"Instant Steal Teleport (Instan)", "Chilli Fast (Chilli Hub)", "Low Speed User", "High Speed User Normal", "High Speed User (Fly)", "Zig-Zag High Speed User"}, MaxVisible = 6, Default = "Instant Steal Teleport (Instan)", Multi = false, Callback = fn144(function(arg)
+	tbl24.stealMode = v40:AddDropdown({Title = "Steal Mode", Content = "Safe Zone Steal = Player TETAP di Zona Aman (Base Plot), telur otomatis ditarik & masuk nest secara instan tanpa jalan/terbang!", Options = {"Instant Safe Zone Steal (Tetap di Base)", "Chilli Fast (Chilli Hub)", "Low Speed User", "High Speed User Normal", "High Speed User (Fly)", "Zig-Zag High Speed User"}, MaxVisible = 6, Default = "Instant Safe Zone Steal (Tetap di Base)", Multi = false, Callback = fn144(function(arg)
 		fn89(arg)
 
 		if type(senaPanels.syncStealMode) == "function" then
